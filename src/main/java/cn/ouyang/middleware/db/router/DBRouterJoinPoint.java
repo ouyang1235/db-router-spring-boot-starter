@@ -1,6 +1,7 @@
 package cn.ouyang.middleware.db.router;
 
 import cn.ouyang.middleware.db.router.annotation.DBRouter;
+import cn.ouyang.middleware.db.router.strategy.IDBRouterStrategy;
 import org.apache.commons.beanutils.BeanUtils;
 import org.apache.commons.lang.StringUtils;
 import org.aspectj.lang.JoinPoint;
@@ -25,8 +26,14 @@ public class DBRouterJoinPoint {
 
     private Logger logger = LoggerFactory.getLogger(DBRouterJoinPoint.class);
 
-    @Autowired
     private DBRouterConfig dbRouterConfig;
+
+    private IDBRouterStrategy dbRouterStrategy;
+
+    public DBRouterJoinPoint(DBRouterConfig dbRouterConfig, IDBRouterStrategy dbRouterStrategy) {
+        this.dbRouterConfig = dbRouterConfig;
+        this.dbRouterStrategy = dbRouterStrategy;
+    }
 
     @Pointcut("@annotation(cn.ouyang.middleware.db.router.annotation.DBRouter)")
     public void aopPoint(){
@@ -40,28 +47,16 @@ public class DBRouterJoinPoint {
         }
         dbKey = StringUtils.isNotBlank(dbKey) ? dbKey : dbRouterConfig.getRouterKey();
 
-        //计算路由
+        // 路由属性
         String dbKeyAttr = getAttrValue(dbKey, jp.getArgs());
-        int size = dbRouterConfig.getDbCount() * dbRouterConfig.getTbCount();
-
-        int idx = (size -1) & (dbKeyAttr.hashCode() ^(dbKeyAttr.hashCode() >>> 16));
-
-        // 库表索引
-        int dbIdx = idx / dbRouterConfig.getTbCount() + 1;
-        int tbIdx = idx - dbRouterConfig.getTbCount() * (dbIdx - 1);
-
-        // 设置到 ThreadLocal
-        DBContextHolder.setDBKey(String.format("%02d", dbIdx));
-        DBContextHolder.setTBKey(String.format("%03d", tbIdx));
-        logger.info("数据库路由 method：{} dbIdx：{} tbIdx：{}", getMethod(jp).getName(), dbIdx, tbIdx);
-
+        //计算路由
+        dbRouterStrategy.doRouter(dbKeyAttr);
         // 返回结果
         try {
             return jp.proceed();
         } finally {
-            //清理ThreadLocal
-            DBContextHolder.clearDBKey();
-            DBContextHolder.clearTBKey();
+            //清除路由信息
+            dbRouterStrategy.clear();
         }
     }
 
@@ -71,20 +66,23 @@ public class DBRouterJoinPoint {
         return jp.getTarget().getClass().getMethod(methodSignature.getName(), methodSignature.getParameterTypes());
     }
 
-    private String getAttrValue(String attrName,Object[] args){
-        if (1 == args.length){
-            return args[0].toString();
+    public String getAttrValue(String attr, Object[] args) {
+        if (1 == args.length) {
+            Object arg = args[0];
+            if (arg instanceof String) {
+                return arg.toString();
+            }
         }
 
         String filedValue = null;
         for (Object arg : args) {
-            try{
-                if (StringUtils.isNotBlank(filedValue)){
+            try {
+                if (StringUtils.isNotBlank(filedValue)) {
                     break;
                 }
-                filedValue = BeanUtils.getProperty(args,attrName);
-            }catch (Exception e){
-                logger.error("获取路由属性值失败 attr：{}",attrName,e);
+                filedValue = BeanUtils.getProperty(arg, attr);
+            } catch (Exception e) {
+                logger.error("获取路由属性值失败 attr：{}", attr, e);
             }
         }
         return filedValue;
